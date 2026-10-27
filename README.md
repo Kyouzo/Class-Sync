@@ -121,7 +121,7 @@ CI (`.github/workflows/ci.yml`) runs every step on each push and pull request: s
      UPDATE "User" SET "roleId" = (SELECT id FROM "Role" WHERE name = 'ADMIN') WHERE email = 'you@example.com';
      ```
 
-     Without the seed, first insert the roles: `INSERT INTO "Role" (id, name, description) VALUES ('role_student','STUDENT','Student'),('role_instructor','INSTRUCTOR','Instructor'),('role_admin','ADMIN','Administrator');`
+     The student, instructor and admin roles are created by the migrations, so registration works without the seed.
 
 Nothing in ClassSync needs a paid service. There is no video hosting, no email provider, and no third-party LMS or assessment API. Lessons are text (Markdown) with file attachments.
 
