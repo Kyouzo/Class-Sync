@@ -1,0 +1,311 @@
+// ClassSync database schema (PostgreSQL / Prisma ORM).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum RoleName {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        RoleName @unique
+  description String
+  users       User[]
+}
+
+model User {
+  id                  String    @id @default(cuid())
+  name                String
+  email               String    @unique
+  passwordHash        String
+  roleId              String
+  role                Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  notificationsSeenAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  coursesTaught   Course[]         @relation("CourseInstructor")
+  enrollments     Enrollment[]
+  lessonProgress  LessonProgress[]
+  quizAttempts    QuizAttempt[]
+  announcements   Announcement[]
+  discussionPosts DiscussionPost[]
+  certificates    Certificate[]
+
+  @@index([roleId])
+}
+
+model Category {
+  id      String   @id @default(cuid())
+  name    String   @unique
+  slug    String   @unique
+  courses Course[]
+}
+
+model Course {
+  id           String       @id @default(cuid())
+  title        String
+  slug         String       @unique
+  summary      String
+  description  String
+  /// Learning objectives for the whole course, one per entry.
+  objectives   String[]
+  status       CourseStatus @default(DRAFT)
+  publishedAt  DateTime?
+  instructorId String
+  instructor   User         @relation("CourseInstructor", fields: [instructorId], references: [id], onDelete: Restrict)
+  categoryId   String?
+  category     Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  // Completion requirements used for course completion and certificate eligibility.
+  requireAllLessons     Boolean @default(true)
+  requirePassingQuizzes Boolean @default(true)
+  /// Minimum course grade (0-100, average of best scores on required quizzes). Null = no minimum.
+  minimumGrade          Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  modules         Module[]
+  quizzes         Quiz[]
+  enrollments     Enrollment[]
+  announcements   Announcement[]
+  discussionPosts DiscussionPost[]
+  certificates    Certificate[]
+
+  @@index([status, publishedAt])
+  @@index([instructorId])
+  @@index([categoryId])
+}
+
+model Module {
+  id       String   @id @default(cuid())
+  courseId String
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title    String
+  position Int
+  lessons  Lesson[]
+  quizzes  Quiz[]
+
+  @@index([courseId, position])
+}
+
+model Lesson {
+  id               String    @id @default(cuid())
+  moduleId         String
+  module           Module    @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  title            String
+  /// Markdown lesson body.
+  content          String
+  objectives       String[]
+  estimatedMinutes Int?
+  dueAt            DateTime?
+  position         Int
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  resources Resource[]
+  progress  LessonProgress[]
+
+  @@index([moduleId, position])
+}
+
+/// Downloadable file attached to a lesson. The binary lives in the configured storage adapter.
+model Resource {
+  id         String   @id @default(cuid())
+  lessonId   String
+  lesson     Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  fileName   String
+  storageKey String   @unique
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime @default(now())
+
+  @@index([lessonId])
+}
+
+model Enrollment {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId    String
+  course      Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  status      EnrollmentStatus @default(ACTIVE)
+  enrolledAt  DateTime         @default(now())
+  completedAt DateTime?
+  certificate Certificate?
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+}
+
+model LessonProgress {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonId    String
+  lesson      Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  completedAt DateTime @default(now())
+
+  @@unique([userId, lessonId])
+  @@index([lessonId])
+}
+
+model Quiz {
+  id           String    @id @default(cuid())
+  courseId     String
+  course       Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  moduleId     String?
+  module       Module?   @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  title        String
+  description  String    @default("")
+  /// Percentage (0-100) required to pass.
+  passingScore Int       @default(70)
+  /// Null = unlimited attempts.
+  maxAttempts  Int?
+  /// Whether passing this quiz counts towards course completion and the course grade.
+  isRequired   Boolean   @default(true)
+  dueAt        DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  questions Question[]
+  attempts  QuizAttempt[]
+
+  @@index([courseId])
+  @@index([dueAt])
+}
+
+model Question {
+  id          String         @id @default(cuid())
+  quizId      String
+  quiz        Quiz           @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  prompt      String
+  explanation String         @default("")
+  points      Int            @default(1)
+  position    Int
+  choices     AnswerChoice[]
+  responses   Response[]
+
+  @@index([quizId, position])
+}
+
+model AnswerChoice {
+  id         String     @id @default(cuid())
+  questionId String
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  text       String
+  isCorrect  Boolean    @default(false)
+  position   Int
+  responses  Response[]
+
+  @@index([questionId])
+}
+
+model QuizAttempt {
+  id            String     @id @default(cuid())
+  quizId        String
+  quiz          Quiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attemptNumber Int
+  score         Int
+  maxScore      Int
+  /// Percentage score, 0-100 with two decimals.
+  percentage    Decimal    @db.Decimal(5, 2)
+  passed        Boolean
+  submittedAt   DateTime   @default(now())
+  responses     Response[]
+
+  @@unique([quizId, userId, attemptNumber])
+  @@index([userId, quizId])
+}
+
+model Response {
+  id            String        @id @default(cuid())
+  attemptId     String
+  attempt       QuizAttempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      Question      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  choiceId      String?
+  choice        AnswerChoice? @relation(fields: [choiceId], references: [id], onDelete: SetNull)
+  /// Snapshot of correctness at grading time, so later edits never change stored grades.
+  isCorrect     Boolean
+  pointsAwarded Int
+
+  @@unique([attemptId, questionId])
+  @@index([questionId])
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  courseId  String
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([courseId, createdAt])
+}
+
+model DiscussionPost {
+  id        String           @id @default(cuid())
+  courseId  String
+  course    Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    DiscussionPost?  @relation("Replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   DiscussionPost[] @relation("Replies")
+  /// Only top-level threads have a title.
+  title     String?
+  body      String
+  createdAt DateTime         @default(now())
+
+  @@index([courseId, parentId, createdAt])
+  @@index([parentId])
+}
+
+/// Issued only when the course's completion requirements are met. Snapshots keep the
+/// certificate stable even if the user or course is later renamed.
+model Certificate {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  userId         String
+  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId       String
+  course         Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  enrollmentId   String     @unique
+  enrollment     Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  recipientName  String
+  courseTitle    String
+  instructorName String
+  finalGrade     Decimal?   @db.Decimal(5, 2)
+  issuedAt       DateTime   @default(now())
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+}

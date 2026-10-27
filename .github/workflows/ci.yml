@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: classsync
+          POSTGRES_PASSWORD: classsync
+          POSTGRES_DB: classsync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U classsync -d classsync"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://classsync:classsync@localhost:5432/classsync?schema=public
+      DIRECT_URL: postgresql://classsync:classsync@localhost:5432/classsync?schema=public
+      TEST_DATABASE_URL: postgresql://classsync:classsync@localhost:5432/classsync_test?schema=public
+      SHADOW_DATABASE_URL: postgresql://classsync:classsync@localhost:5432/classsync_shadow?schema=public
+      AUTH_SECRET: ci-only-secret-do-not-use-in-production-0123456789
+      AUTH_TRUST_HOST: "true"
+      APP_URL: http://localhost:3000
+      STORAGE_DRIVER: local
+      LOCAL_STORAGE_DIR: ./storage
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create test and shadow databases
+        env:
+          PGPASSWORD: classsync
+        run: |
+          psql -h localhost -U classsync -d classsync -c "CREATE DATABASE classsync_test;"
+          psql -h localhost -U classsync -d classsync -c "CREATE DATABASE classsync_shadow;"
+
+      - name: Validate schema and check migrations are up to date
+        run: |
+          npx prisma validate
+          npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$SHADOW_DATABASE_URL" --exit-code
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and component tests
+        run: npm test
+
+      - name: Integration tests (PostgreSQL)
+        run: npm run test:integration
+
+      - name: Migrate and seed application database
+        run: |
+          npx prisma migrate deploy
+          npm run db:seed
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
